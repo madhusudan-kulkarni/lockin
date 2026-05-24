@@ -1,0 +1,36 @@
+# lockin default rules
+# Copy this to ~/.config/lockin/rules.yaml and customize.
+# Patterns: "example.com" matches example.com and *.example.com
+#           ".example.com" matches subdomains only
+#           "example.com/blog" matches path prefix
+
+whitelists:
+  coding:
+    - github.com
+    - stackoverflow.com
+    - docs.python.org
+    - pypi.org
+    - gitlab.com
+
+  email:
+    - mail.google.com
+    - outlook.office.com
+
+blacklists:
+  social:
+    - twitter.com
+    - x.com
+    - facebook.com
+    - instagram.com
+    - reddit.com
+    - tiktok.com
+    - linkedin.com
+    - youtube.com
+    - twitch.tv
+
+  news:
+    - cnn.com
+    - nytimes.com
+    - bbc.com
+    - news.ycombinator.com
+    - reddit.com/r/news

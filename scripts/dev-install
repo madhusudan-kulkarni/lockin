@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# scripts/dev-install — clean previous install & install from local source.
+# Usage: ./scripts/dev-install
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "=== 1. stopping watchdog ==="
+sudo systemctl disable --now lockin-watchdog.timer 2>/dev/null || true
+sudo systemctl disable --now lockin-watchdog.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/lockin-watchdog.{service,timer}
+sudo rm -rf /usr/local/lib/lockin
+sudo systemctl daemon-reload
+
+echo "=== 2. cleaning policies ==="
+sudo rm -f /etc/firefox/policies/policies.json
+sudo rm -f /etc/firefox/policies/policies.json.lockin-backup
+sudo rm -f /etc/opt/chrome/policies/managed/lockin-doh.json
+sudo rm -f /etc/chromium/policies/managed/lockin-doh.json
+sudo rm -f /etc/opt/brave/policies/managed/lockin-doh.json
+sudo rm -f /etc/opt/edge/policies/managed/lockin-doh.json
+
+echo "=== 3. flushing DNS & cleaning stale logs ==="
+sudo resolvectl flush-caches 2>/dev/null || true
+sudo rm -f /tmp/lockin-watchdog.log /tmp/lockin-watchdog-result /tmp/lockin-browser-*.log
+
+echo "=== 4. clearing uv cache & uninstalling old tool ==="
+uv cache clean 2>/dev/null || true
+uv tool uninstall lockin-blocker 2>/dev/null || true
+
+echo "=== 5. installing from local source ==="
+uv tool install --force "$REPO_ROOT"
+
+echo "=== done ==="
+lockin --help

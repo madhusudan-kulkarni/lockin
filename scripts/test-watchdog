@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# scripts/test-watchdog — full end-to-end test of block → expiry → browser restart.
+# Usage: ./scripts/test-watchdog [duration]
+#   duration: how long the block lasts (default: 2m)
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DURATION="${1:-2m}"
+
+echo "========================================"
+echo " lockin watchdog end-to-end test"
+echo " duration: $DURATION"
+echo "========================================"
+echo ""
+
+# —— 1. dev-install ——
+echo ">>> Step 1: dev-install"
+"$REPO_ROOT/scripts/dev-install"
+echo ""
+
+# —— 2. start block ——
+echo ">>> Step 2: starting block ($DURATION)"
+# parse duration for sleep
+H=$(echo "$DURATION" | sed -n 's/.*\([0-9]\+\)h.*/\1/p')
+M=$(echo "$DURATION" | sed -n 's/.*\([0-9]\+\)m.*/\1/p')
+DELAY_SEC=$(( ${H:-0} * 3600 + ${M:-0} * 60 + 15 ))  # 15s buffer after expiry
+
+lockin start --rule social --for "$DURATION"
+echo ""
+
+# —— 3. wait ——
+echo ">>> Step 3: waiting ${DELAY_SEC}s for block to expire + watchdog to fire..."
+sleep "$DELAY_SEC"
+echo ""
+
+# —— 4. check ——
+echo ">>> Step 4: results"
+echo "--- lockin status ---"
+lockin status
+echo ""
+
+echo "--- state file (should have 'browsers' key) ---"
+cat ~/.config/lockin/state.json 2>/dev/null || echo "(no state file)"
+echo ""
+
+echo "--- watchdog journal (system) ---"
+sudo journalctl --no-pager _SYSTEMD_UNIT=lockin-watchdog.service --since "2 min ago" 2>/dev/null || echo "(no system journal entries)"
+echo ""
+
+echo "--- watchdog journal (user) ---"
+journalctl --user --no-pager --since "2 min ago" 2>/dev/null | grep -iE "lockin|watchdog|firefox.*launch|firefox.*start|systemd-run.*firefox" || echo "(no user journal matches)"
+echo ""
+
+echo "--- firefox processes ---"
+pgrep -a firefox 2>/dev/null || echo "(no firefox running)"
+echo ""
+
+echo "--- /etc/hosts lockin block ---"
+grep "lockin" /etc/hosts 2>/dev/null || echo "(no lockin entries in /etc/hosts)"
+echo ""
+
+echo "--- watchdog result file ---"
+cat /tmp/lockin-watchdog-result 2>/dev/null || echo "(no result file — watchdog may not have run)"
+echo ""
+
+echo "========================================"
+echo " test complete"
+echo "========================================"
