@@ -1,7 +1,7 @@
 # lockin
 
 [![CI](https://github.com/madhusudan-kulkarni/lockin/actions/workflows/ci.yml/badge.svg)](https://github.com/madhusudan-kulkarni/lockin/actions)
-[![PyPI](https://img.shields.io/pypi/v/lockin-blocker)](https://pypi.org/project/lockin-blocker/)
+[![PyPI](https://img.shields.io/pypi/v/lockin-blocker.svg)](https://pypi.org/project/lockin-blocker/)
 
 Block distracting websites on Linux. No proxy, no browser extension, no MITM
 certificate.
