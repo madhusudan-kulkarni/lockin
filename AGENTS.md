@@ -1,4 +1,4 @@
-# AGENTS.md — lockin
+# AGENTS.md for lockin
 
 > For AI coding agents working on this project.
 
@@ -39,12 +39,12 @@ lockin uses `/etc/hosts` + nftables for system-level domain blocking. No proxy, 
 | `lockin/block.py` | Orchestration: start/stop/status via /etc/hosts + nftables |
 | `lockin/browser.py` | Browser detection and graceful kill (no relaunch) |
 | `lockin/expand.py` | Hostname expansion (subdomains, aliases) before hosts write |
-| `lockin/hosts.py` | /etc/hosts manager — adds/removes blocked domain entries |
+| `lockin/hosts.py` | /etc/hosts manager. Adds and removes blocked domain entries. |
 | `lockin/nat.py` | nftables/iptables QUIC sinkhole (UDP 443 REJECT) |
 | `lockin/policies.py` | Browser policy deployment (Firefox + Chromium DoH disable) |
 | `lockin/doctor.py` | Installation health checks |
 | `lockin/notify.py` | Desktop notifications via notify-send |
-| `lockin/watchdog.py` | Expiry/re-apply tick — same hosts/nat/policies modules, runs as root |
+| `lockin/watchdog.py` | Expiry and re-apply tick. Same hosts/nat/policies modules, runs as root. |
 | `lockin/watchdog_install.py` | Copies the package and enables the systemd timer |
 
 ### Teardown paths
@@ -55,8 +55,8 @@ lockin uses `/etc/hosts` + nftables for system-level domain blocking. No proxy, 
 ### Browser handling
 
 Browsers are **killed only, never relaunched** (relaunch from a root systemd context
-is unreliable on Wayland).  `lockin start` kills browsers so they pick up DoH-disabled
-policies on next launch.  The watchdog kills browsers at expiry so stale DNS / policy
+is unreliable on Wayland). `lockin start` kills browsers so they pick up DoH-disabled
+policies on next launch. The watchdog kills browsers at expiry so stale DNS / policy
 caches are cleared.  Users reopen browsers manually.
 
 ### State file
@@ -83,6 +83,6 @@ report it in `/tmp/lockin-watchdog-result`.
 
 ## Dependencies
 
-- `click` — CLI framework
-- `pyyaml` — rules file parsing
-- `ruff`, `pytest` — dev only
+- `click`. CLI framework.
+- `pyyaml`. Rules file parsing.
+- `ruff`, `pytest`. Dev only.
