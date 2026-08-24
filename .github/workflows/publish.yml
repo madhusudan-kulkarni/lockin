@@ -34,11 +34,16 @@ jobs:
       - name: Test
         run: uv run pytest -q
       - name: Publish exact artifacts
-        run: >
-          uv publish
-          --trusted-publishing automatic
-          --check-url https://pypi.org/simple/
-          dist/*
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "${UV_PUBLISH_TOKEN:-}" ]; then
+            uv publish --token "$UV_PUBLISH_TOKEN" \
+              --check-url https://pypi.org/simple/ dist/*
+          else
+            uv publish --trusted-publishing automatic \
+              --check-url https://pypi.org/simple/ dist/*
+          fi
       - name: Verify version on PyPI
         run: |
           uv run python scripts/verify_pypi_release.py \
