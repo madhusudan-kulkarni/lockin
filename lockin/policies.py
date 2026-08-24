@@ -9,6 +9,7 @@ Based on piko's piko-browser-guard approach.
 
 import contextlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -27,7 +28,10 @@ POLICY_FILENAME = "lockin-doh.json"
 
 
 def _sudo_write(path: Path, content: str) -> None:
-    """Write a file via sudo tee."""
+    """Write a file as root (direct) or via sudo tee."""
+    if os.geteuid() == 0:
+        path.write_text(content)
+        return
     subprocess.run(
         ["sudo", "tee", str(path)],
         input=content,
@@ -39,7 +43,10 @@ def _sudo_write(path: Path, content: str) -> None:
 
 
 def _sudo_remove(path: Path) -> None:
-    """Remove a file via sudo rm."""
+    """Remove a file as root or via sudo rm."""
+    if os.geteuid() == 0:
+        path.unlink(missing_ok=True)
+        return
     with contextlib.suppress(Exception):
         subprocess.run(
             ["sudo", "rm", "-f", str(path)],
@@ -49,7 +56,10 @@ def _sudo_remove(path: Path) -> None:
 
 
 def _sudo_mkdir(path: Path) -> None:
-    """Create directory via sudo mkdir -p."""
+    """Create directory as root or via sudo mkdir -p."""
+    if os.geteuid() == 0:
+        path.mkdir(parents=True, exist_ok=True)
+        return
     with contextlib.suppress(Exception):
         subprocess.run(
             ["sudo", "mkdir", "-p", str(path)],

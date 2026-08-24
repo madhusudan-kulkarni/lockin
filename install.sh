@@ -13,7 +13,10 @@ need() {
 }
 
 need python3  "python >= 3.11"
-need nft      "sudo dnf install nftables   # Fedora\n  sudo apt install nftables    # Debian/Ubuntu"
+if ! command -v nft &>/dev/null && ! command -v iptables &>/dev/null; then
+  red "Missing firewall backend. Install nftables or iptables."
+  exit 1
+fi
 echo ""
 
 bold "Installing lockin..."
@@ -26,4 +29,4 @@ else
   exit 1
 fi
 
-green "✓ lockin installed. Run 'lockin --help' to get started."
+green "lockin installed. Run 'lockin --help' to get started."

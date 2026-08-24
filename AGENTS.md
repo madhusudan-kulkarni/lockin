@@ -26,7 +26,7 @@ uv run pytest                # all tests
 uv run pytest -v -k "name"   # specific test
 uv run lockin --help         # CLI help
 ./scripts/dev-install        # clean old install + reinstall from local source
-./scripts/test-watchdog      # full e2e test: install → block → wait → verify restart
+./scripts/test-watchdog      # full e2e: install → block → wait → assert expiry
 ```
 
 ## Architecture
@@ -38,11 +38,19 @@ lockin uses `/etc/hosts` + nftables for system-level domain blocking. No proxy, 
 | `lockin/cli.py` | Click commands, arg parsing, output formatting |
 | `lockin/block.py` | Orchestration: start/stop/status via /etc/hosts + nftables |
 | `lockin/browser.py` | Browser detection and graceful kill (no relaunch) |
+| `lockin/expand.py` | Hostname expansion (subdomains, aliases) before hosts write |
 | `lockin/hosts.py` | /etc/hosts manager — adds/removes blocked domain entries |
-| `lockin/nat.py` | nftables/iptables QUIC sinkhole (UDP 443 drop) |
+| `lockin/nat.py` | nftables/iptables QUIC sinkhole (UDP 443 REJECT) |
 | `lockin/policies.py` | Browser policy deployment (Firefox + Chromium DoH disable) |
-| `lockin/scheduler.py` | systemd/at/cron/thread unblock scheduling |
-| `lockin/watchdog.py` | Self-contained expiry watchdog — runs as root via systemd |
+| `lockin/doctor.py` | Installation health checks |
+| `lockin/notify.py` | Desktop notifications via notify-send |
+| `lockin/watchdog.py` | Expiry/re-apply tick — same hosts/nat/policies modules, runs as root |
+| `lockin/watchdog_install.py` | Copies the package and enables the systemd timer |
+
+### Teardown paths
+
+- **Watchdog expiry:** `watchdog._cleanup` (start-stamp guard prevents stale teardown).
+- **CLI stop / unlock --now / cleanup / uninstall:** `block.end_session`.
 
 ### Browser handling
 
@@ -63,10 +71,13 @@ caches are cleared.  Users reopen browsers manually.
   "start": "2026-05-24T21:00:00",
   "end": "2026-05-24T22:00:00",
   "hardcore": true,
-  "browsers": ["firefox", "chrome"]
+  "browsers": ["firefox", "chrome"],
+  "unlock_requested": false
 }
 ```
 
+`domains` are **expanded** hostnames (after `expand.py`), not raw YAML entries.
+`unlock_requested` is set when `lockin unlock` shortens the end time.
 The `browsers` field records what was killed at block start so the watchdog can
 report it in `/tmp/lockin-watchdog-result`.
 

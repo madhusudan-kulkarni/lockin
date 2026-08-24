@@ -1,8 +1,7 @@
-"""NAT management: nftables QUIC sinkhole.
+"""NAT management: nftables QUIC sinkhole with iptables fallback.
 
-Drops UDP port 443 to force browsers to fall back from QUIC/HTTP3
-to TCP/HTTPS. Does NOT redirect any TCP traffic — lockin v2 blocks
-via /etc/hosts and browser extension instead of proxy MITM.
+Rejects QUIC (UDP 443) via nftables when available, or iptables otherwise.
+Domain blocking is handled by /etc/hosts, not here.
 """
 
 import contextlib
@@ -41,8 +40,7 @@ def setup() -> None:
         for cmd in _nft_setup_commands():
             _sudo(cmd)
     else:
-        for cmd in _iptables_setup_commands():
-            _sudo(cmd)
+        _iptables_setup()
 
 
 def reset() -> None:
@@ -55,6 +53,31 @@ def reset() -> None:
         for cmd in _iptables_reset_commands():
             with contextlib.suppress(subprocess.CalledProcessError):
                 _sudo(cmd)
+
+
+def probe() -> str:
+    """Return 'active', 'inactive', or 'unknown' without assuming sudo."""
+    try:
+        kind = backend()
+    except RuntimeError:
+        return "inactive"
+    if kind != "nftables":
+        return "unknown"
+    try:
+        result = subprocess.run(
+            ["nft", "list", "table", "inet", TABLE_NAME],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    if result.returncode == 0:
+        return "active"
+    err = (result.stderr or "").lower()
+    if "permission" in err or "not permitted" in err or "operation" in err:
+        return "unknown"
+    return "inactive"
 
 
 def _nft_setup_commands() -> list[list[str]]:
@@ -82,12 +105,16 @@ def _nft_reset_commands() -> list[list[str]]:
     ]
 
 
-def _iptables_setup_commands() -> list[list[str]]:
-    """Generate iptables commands for QUIC drop."""
-    return [
-        ["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "443", "-j", "REJECT"],
-        ["ip6tables", "-A", "OUTPUT", "-p", "udp", "--dport", "443", "-j", "REJECT"],
-    ]
+def _iptables_setup() -> None:
+    """Add QUIC reject rules idempotently (check before append)."""
+    for table in ("iptables", "ip6tables"):
+        rule = ["-p", "udp", "--dport", "443", "-j", "REJECT"]
+        check = [table, "-C", "OUTPUT", *rule]
+        append = [table, "-A", "OUTPUT", *rule]
+        try:
+            _sudo(check)
+        except subprocess.CalledProcessError:
+            _sudo(append)
 
 
 def _iptables_reset_commands() -> list[list[str]]:

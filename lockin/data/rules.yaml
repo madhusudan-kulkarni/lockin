@@ -1,20 +1,9 @@
-# lockin default rules
-# Copy this to ~/.config/lockin/rules.yaml and customize.
-# Patterns: "example.com" matches example.com and *.example.com
-#           ".example.com" matches subdomains only
-#           "example.com/blog" matches path prefix
+# lockin default rules — named blocklists.
+# Each entry is a hostname. lockin also blocks www.<name>, a few common
+# subdomains (m, mobile, old, new, i, www2), and known aliases
+# (youtu.be, fb.com, …). Globs and URL paths are not supported.
 
-whitelists:
-  coding:
-    - github.com
-    - stackoverflow.com
-    - docs.python.org
-    - pypi.org
-    - gitlab.com
-
-  email:
-    - mail.google.com
-    - outlook.office.com
+default: social
 
 blacklists:
   social:
@@ -33,4 +22,4 @@ blacklists:
     - nytimes.com
     - bbc.com
     - news.ycombinator.com
-    - reddit.com/r/news
+    - reddit.com
