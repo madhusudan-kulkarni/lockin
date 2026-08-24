@@ -1,7 +1,7 @@
 """Watchdog systemd unit installation and removal.
 
-Installs / removes the lockin-watchdog systemd timer that runs
-the self-contained watchdog.py script as root.
+Copies the lockin package to /usr/local/lib/lockin/pkg so the timer
+runs the same hosts/nat/policies code as the CLI.
 """
 
 import contextlib
@@ -11,47 +11,47 @@ import textwrap
 from pathlib import Path
 
 STATE_FILE = Path.home() / ".config" / "lockin" / "state.json"
+PKG_ROOT = "/usr/local/lib/lockin/pkg"
+
+
+def _root(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    if os.geteuid() != 0:
+        cmd = ["sudo", *cmd]
+    return subprocess.run(cmd, **kwargs)
 
 
 def install() -> None:
-    """Install systemd watchdog timer.  Copies watchdog.py to
-    /usr/local/lib so it can run without accessing the user's
-    home directory."""
-    watchdog_src = str(Path(__file__).parent / "watchdog.py")
-    watchdog_dst = "/usr/local/lib/lockin/watchdog.py"
+    """Install systemd watchdog timer and copy the lockin package."""
+    pkg_src = str(Path(__file__).resolve().parent)
 
     user = os.environ.get("USER", "root")
-    display = os.environ.get("DISPLAY", "")
-    wayland = os.environ.get("WAYLAND_DISPLAY", "")
-    xauth = os.environ.get("XAUTHORITY", "")
-    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    dbus = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
-
-    env_lines = [f"Environment=WATCHDOG_USER={user}"]
     home_dir = os.path.expanduser(f"~{user}") if user != "root" else "/root"
-    env_lines.append(f"Environment=HOME={home_dir}")
-    if display:
-        env_lines.append(f"Environment=DISPLAY={display}")
-    if wayland:
-        env_lines.append(f"Environment=WAYLAND_DISPLAY={wayland}")
-    if xauth:
-        env_lines.append(f"Environment=XAUTHORITY={xauth}")
-    if xdg_runtime:
-        env_lines.append(f"Environment=XDG_RUNTIME_DIR={xdg_runtime}")
+    xdg = os.environ.get("XDG_RUNTIME_DIR", "")
+    dbus = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if not dbus and xdg:
+        dbus = f"unix:path={xdg}/bus"
+
+    env_lines = [
+        f"Environment=LOCKIN_STATE={STATE_FILE}",
+        "Environment=LOCKIN_DEBUG=1",
+        f"Environment=HOME={home_dir}",
+        f"Environment=PYTHONPATH={PKG_ROOT}",
+        f"Environment=WATCHDOG_USER={user}",
+    ]
+    if xdg:
+        env_lines.append(f"Environment=XDG_RUNTIME_DIR={xdg}")
     if dbus:
         env_lines.append(f"Environment=DBUS_SESSION_BUS_ADDRESS={dbus}")
-
     env_block = "\n    ".join(env_lines)
+
     service = textwrap.dedent(f"""\
     [Unit]
     Description=lockin watchdog — re-apply blocking rules
 
     [Service]
     Type=oneshot
-    Environment=LOCKIN_STATE={STATE_FILE}
-    Environment=LOCKIN_DEBUG=1
     {env_block}
-    ExecStart=/usr/bin/python3 {watchdog_dst}
+    ExecStart=/usr/bin/python3 -m lockin.watchdog
     """)
 
     timer = textwrap.dedent("""\
@@ -60,84 +60,79 @@ def install() -> None:
 
     [Timer]
     OnBootSec=1min
+    OnActiveSec=1min
     OnUnitActiveSec=1min
 
     [Install]
     WantedBy=timers.target
     """)
 
-    # Stage 1: stop any old instances (best-effort)
     with contextlib.suppress(Exception):
-        subprocess.run(
-            ["sudo", "systemctl", "stop", "lockin-watchdog.timer"],
+        _root(
+            ["systemctl", "stop", "lockin-watchdog.timer"],
             capture_output=True, timeout=10,
         )
-        subprocess.run(
-            ["sudo", "systemctl", "stop", "lockin-watchdog.service"],
+        _root(
+            ["systemctl", "stop", "lockin-watchdog.service"],
             capture_output=True, timeout=10,
         )
-        subprocess.run(
-            ["sudo", "rm", "-f",
+        _root(
+            ["rm", "-f",
              "/etc/systemd/system/lockin-watchdog.service",
              "/etc/systemd/system/lockin-watchdog.timer"],
             capture_output=True, timeout=10,
         )
-        subprocess.run(
-            ["sudo", "pkill", "-f", "lockin/watchdog.py"],
-            capture_output=True, timeout=10,
-        )
 
-    # Stage 2: install files — each step must succeed
-    subprocess.run(
-        ["sudo", "mkdir", "-p", "/usr/local/lib/lockin"],
+    _root(
+        ["rm", "-rf", PKG_ROOT],
         capture_output=True, timeout=10, check=True,
     )
-    subprocess.run(
-        ["sudo", "cp", watchdog_src, watchdog_dst],
+    _root(
+        ["mkdir", "-p", PKG_ROOT],
         capture_output=True, timeout=10, check=True,
     )
-    subprocess.run(
-        ["sudo", "tee", "/etc/systemd/system/lockin-watchdog.service"],
+    _root(
+        ["cp", "-a", pkg_src, f"{PKG_ROOT}/lockin"],
+        capture_output=True, timeout=10, check=True,
+    )
+    _root(
+        ["tee", "/etc/systemd/system/lockin-watchdog.service"],
         input=service, capture_output=True, text=True,
         timeout=10, check=True,
     )
-    subprocess.run(
-        ["sudo", "tee", "/etc/systemd/system/lockin-watchdog.timer"],
+    _root(
+        ["tee", "/etc/systemd/system/lockin-watchdog.timer"],
         input=timer, capture_output=True, text=True,
         timeout=10, check=True,
     )
-    subprocess.run(
-        ["sudo", "systemctl", "daemon-reload"],
+    _root(
+        ["systemctl", "daemon-reload"],
         capture_output=True, timeout=10, check=True,
     )
-    subprocess.run(
-        ["sudo", "systemctl", "enable", "--now", "lockin-watchdog.timer"],
+    _root(
+        ["systemctl", "enable", "--now", "lockin-watchdog.timer"],
         capture_output=True, timeout=10, check=True,
     )
 
 
 def remove() -> None:
-    """Remove systemd watchdog timer and all associated files."""
-    # Best-effort: units may already be gone
+    """Remove systemd watchdog timer and copied package files."""
     with contextlib.suppress(Exception):
-        subprocess.run(
-            [
-                "sudo", "systemctl", "disable", "--now",
-                "lockin-watchdog.timer",
-            ],
+        _root(
+            ["systemctl", "disable", "--now", "lockin-watchdog.timer"],
             capture_output=True, timeout=10,
         )
-        subprocess.run(
-            ["sudo", "rm", "-f",
+        _root(
+            ["rm", "-f",
              "/etc/systemd/system/lockin-watchdog.service",
              "/etc/systemd/system/lockin-watchdog.timer"],
             capture_output=True, timeout=10,
         )
-        subprocess.run(
-            ["sudo", "rm", "-rf", "/usr/local/lib/lockin"],
+        _root(
+            ["rm", "-rf", "/usr/local/lib/lockin"],
             capture_output=True, timeout=10,
         )
-    subprocess.run(
-        ["sudo", "systemctl", "daemon-reload"],
+    _root(
+        ["systemctl", "daemon-reload"],
         capture_output=True, timeout=10, check=True,
     )

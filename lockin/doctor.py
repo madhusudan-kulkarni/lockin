@@ -1,66 +1,69 @@
 """Diagnostic checks for lockin installation health."""
 
 import json
-import os
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import yaml
+
+from lockin.hosts import MARKER_START
+
+
+def _user_home() -> Path:
+    return Path.home()
+
+
+def _hosts_path() -> Path:
+    return Path("/etc/hosts")
+
+
+def _systemd_run_path() -> Path:
+    return Path("/run/systemd/system")
 
 
 def run_checks() -> list[tuple[str, bool, str]]:
     """Run all diagnostic checks. Returns [(name, ok, detail), ...]."""
     results: list[tuple[str, bool, str]] = []
 
-    # 1. Firewall backend
-    backend = shutil.which("nft") or shutil.which("iptables")
+    has_nft = shutil.which("nft") is not None
+    has_iptables = shutil.which("iptables") is not None
     results.append((
         "firewall",
-        backend is not None,
-        "nftables detected" if shutil.which("nft")
-        else "iptables detected" if shutil.which("iptables")
+        has_nft or has_iptables,
+        "nftables detected" if has_nft
+        else "iptables detected" if has_iptables
         else "No firewall backend found. Install nftables or iptables.",
     ))
 
-    # 2. /etc/hosts writability
-    hosts = Path("/etc/hosts")
-    if hosts.exists():
-        writable = os.access(hosts, os.W_OK)
-        results.append((
-            "hosts writable",
-            True,  # sudo is expected and handled
-            "/etc/hosts writable" if writable else
-            "/etc/hosts requires sudo (expected — lockin uses sudo tee)",
-        ))
-    else:
-        results.append((
-            "hosts file",
-            False,
-            "/etc/hosts not found",
-        ))
+    hosts = _hosts_path()
+    results.append((
+        "hosts file",
+        hosts.exists(),
+        "/etc/hosts found" if hosts.exists() else "/etc/hosts not found",
+    ))
 
-    # 3. Rules file
-    rules_path = None
-    user_rules = Path.home() / ".config" / "lockin" / "rules.yaml"
+    user_rules = _user_home() / ".config" / "lockin" / "rules.yaml"
     default_rules = Path(__file__).parent / "data" / "rules.yaml"
-    if user_rules.exists():
-        rules_path = user_rules
-    elif default_rules.exists():
-        rules_path = default_rules
-
+    rules_path = user_rules if user_rules.exists() else (
+        default_rules if default_rules.exists() else None
+    )
     if rules_path:
         try:
             with open(rules_path) as f:
-                data = yaml.safe_load(f)
-            whitelist_count = len(data.get("whitelists", {}))
-            blacklist_count = len(data.get("blacklists", {}))
-            total = whitelist_count + blacklist_count
+                data = yaml.safe_load(f) or {}
+            blacklist_count = len(data.get("blacklists") or {})
+            legacy_count = len(data.get("whitelists") or {})
+            total = blacklist_count + legacy_count
+            extra = (
+                f", {legacy_count} legacy whitelist key"
+                if legacy_count else ""
+            )
             results.append((
                 "rules",
                 total > 0,
-                f"{total} rules ({whitelist_count} whitelist, "
-                f"{blacklist_count} blacklist) in {rules_path}",
+                f"{total} blocklist(s){extra} in {rules_path}",
             ))
         except Exception as e:
             results.append((
@@ -69,101 +72,157 @@ def run_checks() -> list[tuple[str, bool, str]]:
                 f"Failed to parse {rules_path}: {e}",
             ))
     else:
-        results.append((
-            "rules",
-            False,
-            "No rules file found",
-        ))
+        results.append(("rules", False, "No rules file found"))
 
-    # 4. State file (stale check)
-    state_path = Path.home() / ".config" / "lockin" / "state.json"
+    if user_rules.exists():
+        try:
+            with open(user_rules) as f:
+                user_data = yaml.safe_load(f) or {}
+            names = set((user_data.get("blacklists") or {}).keys())
+            names.update((user_data.get("whitelists") or {}).keys())
+            default = user_data.get("default")
+            if len(names) > 1 and not (
+                isinstance(default, str) and default.strip()
+            ):
+                results.append((
+                    "default rule",
+                    True,
+                    "No default key in rules.yaml. "
+                    "Add `default: social` or pass --rule each time.",
+                ))
+        except Exception:
+            pass
+
+    has_systemd = (
+        shutil.which("systemctl") is not None
+        and _systemd_run_path().exists()
+    )
+    results.append((
+        "systemd",
+        has_systemd,
+        "systemd available" if has_systemd
+        else "systemd not found (lockin requires systemd)",
+    ))
+
+    state_path = _user_home() / ".config" / "lockin" / "state.json"
+    state = None
+    live = False
     if state_path.exists():
         try:
             state = json.loads(state_path.read_text())
-            end = state.get("end", "")
-            results.append((
-                "state",
-                False,
-                f"Stale state file present (ended {end}). "
-                "Run 'lockin cleanup' to remove.",
-            ))
+            end = datetime.fromisoformat(state.get("end", ""))
+            live = datetime.now() < end
         except Exception:
             results.append((
-                "state",
+                "session",
                 False,
                 "Corrupt state file. Run 'lockin cleanup'.",
             ))
-    else:
-        results.append((
-            "state",
-            True,
-            "No stale state",
-        ))
+            return results
 
-    # 5. Hosts entries check
     hosts_block = False
     if hosts.exists():
-        content = hosts.read_text()
-        hosts_block = "# === lockin start ===" in content
-    results.append((
-        "hosts entries",
-        not hosts_block,
-        "No lockin entries" if not hosts_block
-        else "Stale lockin entries in /etc/hosts. Run 'lockin cleanup'.",
-    ))
+        hosts_block = MARKER_START in hosts.read_text()
 
-    # 6. DoH canary domain
-    canary_blocked = False
-    if hosts.exists():
-        canary_blocked = "use-application-dns.net" in hosts.read_text()
-    results.append((
-        "firefox DoH",
-        True,
-        "Canary domain in /etc/hosts" if canary_blocked
-        else "Canary domain not in /etc/hosts (added during active block)",
-    ))
+    nft_table = _nft_table_present()
+    timer_active = _timer_active() if has_systemd else False
 
-    # 7. Scheduler availability
-    has_systemd = (
-        shutil.which("systemctl") is not None
-        and Path("/run/systemd/system").exists()
-    )
-    has_at = shutil.which("at") is not None
-    has_cron = shutil.which("crontab") is not None
+    leftovers = hosts_block or nft_table is True or timer_active
 
-    if has_systemd:
-        sched_detail = "systemd (optimal)"
-    elif has_at:
-        sched_detail = "at (fallback)"
-    elif has_cron:
-        sched_detail = "cron (fallback)"
+    if live and state is not None:
+        until = state.get("end", "")
+        results.append((
+            "session",
+            True,
+            f"block live until {until}",
+        ))
+        results.append((
+            "hosts entries",
+            hosts_block,
+            "lockin markers present" if hosts_block
+            else "Hosts markers missing during live block. "
+            "The watchdog should restore them.",
+        ))
+        if nft_table is True:
+            nft_ok, nft_detail = True, "lockin nft table present"
+        elif nft_table is False:
+            nft_ok, nft_detail = True, (
+                "no nft table (iptables backend or not yet applied)"
+            )
+        else:
+            nft_ok, nft_detail = True, "nft status unknown (needs sudo)"
+        results.append(("nftables", nft_ok, nft_detail))
+        results.append((
+            "watchdog",
+            timer_active if has_systemd else True,
+            "timer active" if timer_active
+            else "timer not active" if has_systemd
+            else "skipped (no systemd)",
+        ))
+    elif leftovers or state is not None:
+        results.append((
+            "session",
+            False,
+            "Leftover lockin state. Run 'lockin cleanup'.",
+        ))
+        results.append((
+            "hosts entries",
+            not hosts_block,
+            "No lockin entries" if not hosts_block
+            else "Stale lockin entries in /etc/hosts. Run 'lockin cleanup'.",
+        ))
+        if nft_table is True:
+            results.append((
+                "nftables",
+                False,
+                "Stale lockin nft table. Run 'lockin cleanup'.",
+            ))
+        elif nft_table is False:
+            results.append(("nftables", True, "No stale lockin table"))
+        else:
+            results.append(("nftables", True, "nft status unknown (needs sudo)"))
+        if timer_active:
+            results.append((
+                "watchdog",
+                False,
+                "Watchdog timer still enabled. Run 'lockin cleanup'.",
+            ))
+        else:
+            results.append(("watchdog", True, "No leftover timer"))
     else:
-        sched_detail = "in-process timer (last resort)"
-
-    results.append((
-        "scheduler",
-        has_systemd,
-        sched_detail,
-    ))
-
-    # 8. nftables lockin table
-    try:
-        result = subprocess.run(
-            ["sudo", "nft", "list", "table", "inet", "lockin"],
-            capture_output=True, text=True, timeout=5,
-        )
-        has_table = result.returncode == 0
-    except Exception:
-        has_table = False
-
-    results.append((
-        "nftables",
-        not has_table,
-        "Table present (should not exist without active block)"
-        if has_table else "No stale lockin table",
-    ))
+        results.append(("session", True, "No active block, no leftovers"))
+        results.append(("hosts entries", True, "No lockin entries"))
+        results.append(("nftables", True, "No stale lockin table"))
+        results.append(("watchdog", True, "No leftover timer"))
 
     return results
+
+
+def _nft_table_present() -> bool | None:
+    try:
+        result = subprocess.run(
+            ["nft", "list", "table", "inet", "lockin"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return None
+    if result.returncode == 0:
+        return True
+    err = (result.stderr or "").lower()
+    if "permission" in err or "not permitted" in err:
+        return None
+    return False
+
+
+def _timer_active() -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "lockin-watchdog.timer"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() == "active"
+    except Exception:
+        return False
 
 
 def format_results(results: list[tuple[str, bool, str]]) -> str:

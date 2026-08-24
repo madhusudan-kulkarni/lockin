@@ -88,8 +88,7 @@ def add_entries(domains: list[str]) -> None:
     """Add lockin hosts entries for the given domains.
 
     Appends between MARKER_START and MARKER_END markers. Removes any
-    existing lockin block first (idempotent). Includes the Firefox
-    DoH canary domain automatically.
+    existing lockin block first (idempotent).
     """
     all_domains = list(domains)
     lines = _read_hosts()
@@ -148,10 +147,7 @@ def unlock_hosts() -> None:
 
 
 def get_entries() -> list[str]:
-    """Get list of domains currently in the lockin hosts block.
-
-    Excludes the canary domain from results (it's an implementation detail).
-    """
+    """Get list of domains currently in the lockin hosts block."""
     lines = _read_hosts()
     pattern = re.compile(
         r"^(?:127\.0\.0\.2|::1)\s+(\S+)"
@@ -168,5 +164,4 @@ def get_entries() -> list[str]:
             match = pattern.match(line)
             if match:
                 domains.add(match.group(1))
-    domains.discard("use-application-dns.net")
     return sorted(domains)

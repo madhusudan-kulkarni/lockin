@@ -3,118 +3,156 @@
 [![CI](https://github.com/madhusudan-kulkarni/lockin/actions/workflows/ci.yml/badge.svg)](https://github.com/madhusudan-kulkarni/lockin/actions)
 [![PyPI](https://img.shields.io/pypi/v/lockin-blocker)](https://pypi.org/project/lockin-blocker/)
 
-Block distracting websites at the system level.  No proxy, no browser
-extension, no MITM certificate.
+Block distracting websites on Linux. No proxy, no browser extension, no MITM
+certificate.
 
-lockin writes blocked domains to `/etc/hosts` and blocks QUIC/HTTP3 via
-nftables.  Every application on your system is affected until the timer
-expires.  A systemd watchdog re-applies blocks every 60 seconds to
-prevent tampering.
+lockin writes blocked domains to `/etc/hosts` and rejects QUIC/HTTP3 (UDP 443)
+via nftables or iptables for **every destination** on the machine. A systemd
+watchdog re-applies the block about once a minute.
 
 ## Quick start
 
+Linux with systemd. Run lockin as yourself. The tool calls `sudo` for
+`/etc/hosts` and firewall rules. Do **not** run `sudo lockin`.
+
 ```bash
 uv tool install lockin-blocker
-lockin start --rule social --for 2h
+lockin start --for 2h
 lockin status
 ```
 
+**Browsers close on start.** Save your work first. Reopen them after start so
+they pick up DoH-disabled policies. Default mode is **hardcore**. `lockin stop`
+is refused. Use `lockin unlock --now` to end early, or `lockin start --soft` if
+you want `lockin stop` to work.
+
+The command is `lockin`. The PyPI package is `lockin-blocker`.
+
 ## Install
 
-Requires Python ≥3.11, systemd, and nftables (or iptables).  `sudo` is
-used for `/etc/hosts` writes and firewall rules.
+Python 3.11+, systemd, and nftables (or iptables).
 
 ```bash
-uv tool install lockin-blocker          # recommended (uv)
-pip install lockin-blocker              # pip / pipx
+uv tool install lockin-blocker          # recommended
+pip install lockin-blocker
+./install.sh                            # same as uv/pip from PyPI, not a local checkout
+lockin update                           # upgrade the CLI package
 ```
 
-Or install the latest from git:
+From a git clone, use `./scripts/dev-install` instead of `install.sh`.
 
-```bash
-uv tool install git+https://github.com/madhusudan-kulkarni/lockin.git
-```
+Read [CHANGELOG](CHANGELOG.md) when you upgrade.
+
+## Existing users
+
+The first `lockin start` or `lockin list` copies packaged `rules.yaml` to
+`~/.config/lockin/rules.yaml` **once**. Later upgrades do not merge new
+defaults into that file. Edit your copy after reading the changelog.
+
+If you have more than one rule and no `default` key, pass `--rule` every time,
+or add `default: social`, so `lockin start --for 2h` works.
 
 ## Usage
 
 ```
-lockin start --rule <name> --for 30m    Start a blocking session
-lockin start --rule <name> --until 17:00  Block until a specific time
-lockin start --soft --rule <name> --for 30m  Allow early stop
-lockin status                             Show remaining time
-lockin extend 30                          Add 30 minutes to current block
-lockin unlock 30                          Queue early unlock (30 min cooldown)
-lockin unlock --now                       Emergency immediate unlock
-lockin stop                               End the block (--soft mode only)
-lockin list                               List all rules
-lockin doctor                             Check installation health
-lockin cleanup                            Remove leftovers from crashes
-lockin uninstall                          Clean system files, print removal steps
+lockin start --for 2h                     Start with the default rule
+lockin start --rule social --for 30m      Named blocklist
+lockin start --rule social,news --for 2h  Stack blocklists
+lockin start --until 17:00                Block until a clock time
+lockin start --soft --for 30m             Allow lockin stop
+lockin status                             Remaining time (wall clock)
+lockin status --json                      Machine-readable status
+lockin extend 30                          Add 30 minutes
+lockin unlock 30                          Early unlock after a cooldown (default 30)
+lockin unlock --now                       End now
+lockin stop                               End block (soft sessions only)
+lockin list                               List rules
+lockin doctor                             Installation health
+lockin cleanup                            Strip leftovers (ends a live session)
+lockin uninstall                          Remove system files
+lockin update                             Upgrade the CLI package
 ```
 
-Durations accept `30m`, `2h`, `1h30m`.  Times accept `17:00` or `9:30pm`.
+Durations are `30m`, `2h`, `1h30m`. Times are `17:00` or `9:30pm`.
 
-## What happens during a block
+### `lockin status --json`
 
-1. Blocked domains are written to `/etc/hosts` and the file is locked
-   with `chattr +i` — it cannot be edited, not even with `sudo`.
-2. Browser enterprise policies are deployed to disable DNS-over-HTTPS
-   in Firefox, Chrome, Chromium, Brave, and Edge.
-3. Open browsers are **closed** so they pick up the DoH-disabled
-   configuration on next launch.  You reopen them manually.
-4. QUIC/HTTP3 (UDP 443) is rejected via nftables so browsers fall back
-   to standard TCP/HTTPS, which respects `/etc/hosts`.
-5. A systemd watchdog timer fires every 60 seconds to re-apply blocks
-   if they are tampered with.
-6. When the timer expires the watchdog removes all blocks, clears
-   policies, and closes browsers so cached DNS entries are flushed.
-   Reopen your browsers manually.
+When idle: `{"active": false}`.
+
+When live:
+
+| Key | Meaning |
+|-----|---------|
+| `active` | `true` |
+| `rule_name` | Active rule(s), comma-joined if stacked |
+| `end` | ISO end time (wall clock) |
+| `remaining_seconds` | Seconds until `end` |
+| `hosts` | `"active"` or `"missing"` |
+| `hosts_count` | Domains in `/etc/hosts` |
+| `firewall` | `"active"`, `"inactive"`, or `"unknown"` |
+| `block_type` | Legacy `"blacklist"`. Every rule is a blocklist. |
+
+### Expiry and teardown
+
+`lockin status` is wall clock. Hosts, firewall, and policies come down on the
+next watchdog tick (about 60s after `end`), not at the exact second. After a
+reboot, QUIC can work until the first tick.
+
+`lockin update` upgrades the CLI only. The copy under
+`/usr/local/lib/lockin/pkg` refreshes on the next `lockin start`.
+
+### Notifications
+
+Expiry, soft `stop`, and `unlock --now` try `notify-send`. If it is missing,
+the block still ends.
 
 ## Rules
 
-Rules live in `~/.config/lockin/rules.yaml`.  A default file is
-copied there on first run.  Edit it to add your own domains.
+Edit `~/.config/lockin/rules.yaml`. Every rule is a **blocklist**. Listed
+hostnames go into `/etc/hosts`. lockin expands a few common subdomains and
+aliases. No globs. No allowlist. A legacy `whitelists:` key is still loaded as
+blocklists.
 
 ```yaml
-whitelists:       # block everything EXCEPT these
-  coding:
-    - github.com
-    - stackoverflow.com
-    - docs.python.org
+default: social
 
-blacklists:       # allow everything EXCEPT these
+blacklists:
   social:
     - twitter.com
-    - facebook.com
     - reddit.com
-    - youtube.com
 ```
+
+## Firewall backends
+
+**nftables** is the one `lockin status` can verify. **iptables** still rejects
+UDP 443, but `firewall` in status JSON stays `"unknown"` because probe only
+lists the nft table.
+
+## Browser policies
+
+lockin writes enterprise policies that turn off DNS-over-HTTPS. **Snap and
+Flatpak Firefox** often ignore `/etc/firefox/policies`. Use distro Firefox, or
+close and reopen after policies land. Browsers are killed on start and at
+expiry. You reopen them.
 
 ## Troubleshooting
 
-**Sites still load in Firefox.**  Firefox DNS-over-HTTPS was not
-disabled.  Close Firefox and reopen it — the enterprise policy
-deployed by lockin takes effect on the next launch.
+**Hosts missing during a live block.** Wait about a minute for the watchdog.
+`lockin cleanup` ends the session.
 
-**Sites still blocked after the timer expires.**  Run `lockin cleanup`
-to force-remove leftover hosts entries and firewall rules.
+**Sites still blocked after expiry.** Wait for the next tick, then
+`lockin cleanup` if leftovers remain.
 
-**`lockin stop` fails with "Hardcore mode is active."**  You started
-the block without `--soft`.  Use `lockin unlock --now` for emergency
-access, or wait for the timer.
+**`lockin stop` refused.** Hardcore mode. Use `lockin unlock --now` or wait.
+
+**`lockin doctor` fails.** Fix the failed checks. Use `lockin cleanup` for
+leftovers when no session should be running.
 
 ## Uninstall
 
 ```bash
-lockin uninstall                     # removes systemd units, policies
-uv tool uninstall lockin-blocker     # removes the binary
-```
-
-Or with pip:
-
-```bash
 lockin uninstall
-pip uninstall lockin-blocker
+uv tool uninstall lockin-blocker
 ```
 
 ## License

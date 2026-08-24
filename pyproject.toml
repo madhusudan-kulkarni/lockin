@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lockin-blocker"
-version = "2026.5.0"
-description = "Block distracting websites on Linux — system-level blocking via /etc/hosts and nftables"
+version = "2026.8.2"
+description = "Block distracting websites on Linux with /etc/hosts and nftables"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

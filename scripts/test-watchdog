@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/test-watchdog — full end-to-end test of block → expiry → browser restart.
+# scripts/test-watchdog — end-to-end: install → block → wait → assert expiry.
 # Usage: ./scripts/test-watchdog [duration]
 #   duration: how long the block lasts (default: 2m)
 set -euo pipefail
@@ -12,56 +12,48 @@ echo " duration: $DURATION"
 echo "========================================"
 echo ""
 
-# —— 1. dev-install ——
 echo ">>> Step 1: dev-install"
 "$REPO_ROOT/scripts/dev-install"
 echo ""
 
-# —— 2. start block ——
 echo ">>> Step 2: starting block ($DURATION)"
-# parse duration for sleep
 H=$(echo "$DURATION" | sed -n 's/.*\([0-9]\+\)h.*/\1/p')
 M=$(echo "$DURATION" | sed -n 's/.*\([0-9]\+\)m.*/\1/p')
-DELAY_SEC=$(( ${H:-0} * 3600 + ${M:-0} * 60 + 15 ))  # 15s buffer after expiry
+# Watchdog polls about once a minute; wait duration plus 75s.
+DELAY_SEC=$(( ${H:-0} * 3600 + ${M:-0} * 60 + 75 ))
 
 lockin start --rule social --for "$DURATION"
 echo ""
 
-# —— 3. wait ——
 echo ">>> Step 3: waiting ${DELAY_SEC}s for block to expire + watchdog to fire..."
 sleep "$DELAY_SEC"
 echo ""
 
-# —— 4. check ——
-echo ">>> Step 4: results"
+echo ">>> Step 4: assertions"
+STATUS=$(lockin status)
 echo "--- lockin status ---"
-lockin status
-echo ""
+echo "$STATUS"
+if echo "$STATUS" | grep -q "No active block"; then
+  echo "OK: status reports no active block"
+else
+  echo "FAIL: expected no active block after expiry"
+  exit 1
+fi
 
-echo "--- state file (should have 'browsers' key) ---"
-cat ~/.config/lockin/state.json 2>/dev/null || echo "(no state file)"
-echo ""
+if grep -q "=== lockin start ===" /etc/hosts 2>/dev/null; then
+  echo "FAIL: lockin markers still in /etc/hosts"
+  exit 1
+fi
+echo "OK: no lockin markers in /etc/hosts"
 
-echo "--- watchdog journal (system) ---"
-sudo journalctl --no-pager _SYSTEMD_UNIT=lockin-watchdog.service --since "2 min ago" 2>/dev/null || echo "(no system journal entries)"
-echo ""
+if [[ -f ~/.config/lockin/state.json ]]; then
+  echo "FAIL: state.json still present"
+  cat ~/.config/lockin/state.json
+  exit 1
+fi
+echo "OK: state.json removed"
 
-echo "--- watchdog journal (user) ---"
-journalctl --user --no-pager --since "2 min ago" 2>/dev/null | grep -iE "lockin|watchdog|firefox.*launch|firefox.*start|systemd-run.*firefox" || echo "(no user journal matches)"
 echo ""
-
-echo "--- firefox processes ---"
-pgrep -a firefox 2>/dev/null || echo "(no firefox running)"
-echo ""
-
-echo "--- /etc/hosts lockin block ---"
-grep "lockin" /etc/hosts 2>/dev/null || echo "(no lockin entries in /etc/hosts)"
-echo ""
-
-echo "--- watchdog result file ---"
-cat /tmp/lockin-watchdog-result 2>/dev/null || echo "(no result file — watchdog may not have run)"
-echo ""
-
 echo "========================================"
 echo " test complete"
 echo "========================================"
